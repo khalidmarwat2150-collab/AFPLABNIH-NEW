@@ -289,13 +289,14 @@ if uploaded_files:
 # --------------------------------------------------
 # 17. PROVINCE-LEVEL ML RISK CLASSIFICATION
 # --------------------------------------------------
+
 st.markdown("---")
 st.header("🧠 Province-level Risk Classification (ML)")
 
 # Sidebar toggle to enable ML
 enable_risk_ml = st.sidebar.checkbox("Enable Province Risk ML", value=False)
 
-if enable_risk_ml and not filtered_df.empty:
+if enable_risk_ml:
 
     # --------------------------------------------------
     # Step 1: Province-level aggregation
@@ -344,12 +345,11 @@ if enable_risk_ml and not filtered_df.empty:
     y = province_df["Risk_Level"]
 
     # --------------------------------------------------
-    # Step 4: Train Random Forest safely
+    # Step 4: Train Random Forest (safe for small datasets)
     # --------------------------------------------------
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import classification_report
-    from collections import Counter
 
     @st.cache_resource(show_spinner="Training Province Risk ML model...")
     def train_risk_model(X_train, y_train):
@@ -362,33 +362,32 @@ if enable_risk_ml and not filtered_df.empty:
         model.fit(X_train, y_train)
         return model
 
-    # Safe train/test split
-    class_counts = Counter(y)
-    if min(class_counts.values()) >= 2:
+    # Check class distribution
+    class_counts = y.value_counts()
+    if (class_counts < 2).any():
+        st.warning(
+            "⚠️ Dataset too small for train/test split. "
+            "The model will be trained on the full dataset without evaluation."
+        )
+        rf_model = train_risk_model(X, y)
+        province_df["Predicted_Risk"] = rf_model.predict(X)
+    else:
+        # Train/test split
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.25, random_state=42, stratify=y
         )
-    else:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.25, random_state=42
-        )
+        rf_model = train_risk_model(X_train, y_train)
 
-    rf_model = train_risk_model(X_train, y_train)
-
-    # --------------------------------------------------
-    # Step 5: Model Evaluation
-    # --------------------------------------------------
-    if len(y_test) > 0 and len(set(y_test)) > 0:
+        # Model evaluation
+        y_pred_test = rf_model.predict(X_test)
         st.subheader("📊 Model Evaluation")
-        st.text(classification_report(y_test, rf_model.predict(X_test)))
+        st.text(classification_report(y_test, y_pred_test))
+
+        # Predict on full data for dashboard
+        province_df["Predicted_Risk"] = rf_model.predict(X)
 
     # --------------------------------------------------
-    # Step 6: Predict Province Risk
-    # --------------------------------------------------
-    province_df["Predicted_Risk"] = rf_model.predict(X)
-
-    # --------------------------------------------------
-    # Step 7: Visuals - Risk Classification
+    # Step 5: Visuals - Risk Classification
     # --------------------------------------------------
     st.subheader("🗺️ Province Risk Classification")
     st.dataframe(
@@ -415,7 +414,7 @@ if enable_risk_ml and not filtered_df.empty:
     st.dataframe(imp_df)
 
     # --------------------------------------------------
-    # Step 8: Manual retrain button
+    # Step 6: Manual retrain button
     # --------------------------------------------------
     if st.sidebar.button("🔁 Force Model Retrain"):
         train_risk_model.clear()
