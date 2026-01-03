@@ -289,16 +289,17 @@ if uploaded_files:
 # --------------------------------------------------
 # 17. PROVINCE-LEVEL ML RISK CLASSIFICATION
 # --------------------------------------------------
-
 st.markdown("---")
 st.header("🧠 Province-level Risk Classification (ML)")
 
 # Sidebar toggle to enable ML
 enable_risk_ml = st.sidebar.checkbox("Enable Province Risk ML", value=False)
 
-if uploaded_files and enable_risk_ml:
+if enable_risk_ml and not filtered_df.empty:
 
+    # --------------------------------------------------
     # Step 1: Province-level aggregation
+    # --------------------------------------------------
     province_df = filtered_df.groupby("PROVINCE").agg(
         total_cases = ("IDCODE", "count"),
         afp_cases   = ("AFPCASES_UNIQ", "sum"),
@@ -322,7 +323,9 @@ if uploaded_files and enable_risk_ml:
         province_df["avdpv2"]
     )
 
-    # Step 2: Define Risk Level
+    # --------------------------------------------------
+    # Step 2: Define Risk Level (Target y)
+    # --------------------------------------------------
     def assign_risk(row):
         if row["wpv_cases"] > 0 or row["vdpv_cases"] > 0:
             return "High"
@@ -333,15 +336,20 @@ if uploaded_files and enable_risk_ml:
 
     province_df["Risk_Level"] = province_df.apply(assign_risk, axis=1)
 
+    # --------------------------------------------------
     # Step 3: Prepare ML data
+    # --------------------------------------------------
     features = ["total_cases", "afp_cases", "wpv_cases", "vdpv_cases", "npev_cases", "nvi_cases"]
     X = province_df[features]
     y = province_df["Risk_Level"]
 
-    # Step 4: Train Random Forest
+    # --------------------------------------------------
+    # Step 4: Train Random Forest safely
+    # --------------------------------------------------
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import classification_report
+    from collections import Counter
 
     @st.cache_resource(show_spinner="Training Province Risk ML model...")
     def train_risk_model(X_train, y_train):
@@ -354,25 +362,34 @@ if uploaded_files and enable_risk_ml:
         model.fit(X_train, y_train)
         return model
 
-    # Safe train/test split: stratify only if enough samples
-    if len(province_df) >= 6:  # minimum 2 samples per class approx.
+    # Safe train/test split
+    class_counts = Counter(y)
+    if min(class_counts.values()) >= 2:
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.25, random_state=42, stratify=y
         )
     else:
-        X_train, X_test, y_train, y_test = X, X, y, y  # train/test = all
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.25, random_state=42
+        )
 
     rf_model = train_risk_model(X_train, y_train)
 
+    # --------------------------------------------------
     # Step 5: Model Evaluation
-    y_pred = rf_model.predict(X_test)
-    st.subheader("📊 Model Evaluation")
-    st.text(classification_report(y_test, y_pred, zero_division=0))
+    # --------------------------------------------------
+    if len(y_test) > 0 and len(set(y_test)) > 0:
+        st.subheader("📊 Model Evaluation")
+        st.text(classification_report(y_test, rf_model.predict(X_test)))
 
+    # --------------------------------------------------
     # Step 6: Predict Province Risk
+    # --------------------------------------------------
     province_df["Predicted_Risk"] = rf_model.predict(X)
 
+    # --------------------------------------------------
     # Step 7: Visuals - Risk Classification
+    # --------------------------------------------------
     st.subheader("🗺️ Province Risk Classification")
     st.dataframe(
         province_df[["PROVINCE", "Predicted_Risk", "wpv_cases", "vdpv_cases", "npev_cases", "total_cases"]]
@@ -397,7 +414,9 @@ if uploaded_files and enable_risk_ml:
     }).sort_values("Importance", ascending=False)
     st.dataframe(imp_df)
 
+    # --------------------------------------------------
     # Step 8: Manual retrain button
+    # --------------------------------------------------
     if st.sidebar.button("🔁 Force Model Retrain"):
         train_risk_model.clear()
         st.experimental_rerun()
@@ -407,4 +426,5 @@ if uploaded_files and enable_risk_ml:
         "⚠️ Province risk classification is for surveillance decision support only. "
         "It does NOT replace laboratory confirmation or epidemiological investigation."
     )
+
 
