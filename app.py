@@ -286,114 +286,125 @@ if uploaded_files:
     )
     st.plotly_chart(fig_r_result2, use_container_width=True)
 
-    # --------------------------------------------------
-    # 17. PROVINCE-LEVEL ML RISK CLASSIFICATION
-    # --------------------------------------------------
-    st.markdown("---")
-    st.header("🧠 Province-level Risk Classification (ML)")
+# --------------------------------------------------
+# 17. PROVINCE-LEVEL ML RISK CLASSIFICATION
+# --------------------------------------------------
 
-    # Sidebar toggle to enable ML
-    enable_risk_ml = st.sidebar.checkbox("Enable Province Risk ML", value=False)
+st.markdown("---")
+st.header("🧠 Province-level Risk Classification (ML)")
 
-    if enable_risk_ml:
+# Sidebar toggle to enable ML
+enable_risk_ml = st.sidebar.checkbox("Enable Province Risk ML", value=False)
 
-        # Step 1: Province-level aggregation
-        province_df = filtered_df.groupby("PROVINCE").agg(
-            total_cases = ("IDCODE", "count"),
-            afp_cases   = ("AFPCASES_UNIQ", "sum"),
-            wpv_cases   = ("R_WPV", "sum"),
-            npev_cases  = ("R_NPEV", "sum"),
-            nvi_cases   = ("R_Negative", "sum"),
-            vdpv1       = ("R_VDPV1", "sum"),
-            cvdpv2      = ("R_cVDPV2", "sum"),
-            avdpv1      = ("R_aVDPV1", "sum"),
-            ivdpv1      = ("R_iVDPV1", "sum"),
-            ivdpv3      = ("R_iVDPV3", "sum"),
-            avdpv2      = ("R_aVDPV2", "sum"),
-        ).reset_index()
+if uploaded_files and enable_risk_ml:
 
-        province_df["vdpv_cases"] = (
-            province_df["vdpv1"] +
-            province_df["cvdpv2"] +
-            province_df["avdpv1"] +
-            province_df["ivdpv1"] +
-            province_df["ivdpv3"] +
-            province_df["avdpv2"]
+    # Step 1: Province-level aggregation
+    province_df = filtered_df.groupby("PROVINCE").agg(
+        total_cases = ("IDCODE", "count"),
+        afp_cases   = ("AFPCASES_UNIQ", "sum"),
+        wpv_cases   = ("R_WPV", "sum"),
+        npev_cases  = ("R_NPEV", "sum"),
+        nvi_cases   = ("R_Negative", "sum"),
+        vdpv1       = ("R_VDPV1", "sum"),
+        cvdpv2      = ("R_cVDPV2", "sum"),
+        avdpv1      = ("R_aVDPV1", "sum"),
+        ivdpv1      = ("R_iVDPV1", "sum"),
+        ivdpv3      = ("R_iVDPV3", "sum"),
+        avdpv2      = ("R_aVDPV2", "sum"),
+    ).reset_index()
+
+    province_df["vdpv_cases"] = (
+        province_df["vdpv1"] +
+        province_df["cvdpv2"] +
+        province_df["avdpv1"] +
+        province_df["ivdpv1"] +
+        province_df["ivdpv3"] +
+        province_df["avdpv2"]
+    )
+
+    # Step 2: Define Risk Level
+    def assign_risk(row):
+        if row["wpv_cases"] > 0 or row["vdpv_cases"] > 0:
+            return "High"
+        elif row["npev_cases"] > 0 or row["afp_cases"] > 0:
+            return "Medium"
+        else:
+            return "Low"
+
+    province_df["Risk_Level"] = province_df.apply(assign_risk, axis=1)
+
+    # Step 3: Prepare ML data
+    features = ["total_cases", "afp_cases", "wpv_cases", "vdpv_cases", "npev_cases", "nvi_cases"]
+    X = province_df[features]
+    y = province_df["Risk_Level"]
+
+    # Step 4: Train Random Forest
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import classification_report
+
+    @st.cache_resource(show_spinner="Training Province Risk ML model...")
+    def train_risk_model(X_train, y_train):
+        model = RandomForestClassifier(
+            n_estimators=500,
+            max_depth=6,
+            class_weight="balanced",
+            random_state=42
         )
+        model.fit(X_train, y_train)
+        return model
 
-        # Step 2: Assign Risk Level
-        def assign_risk(row):
-            if row["wpv_cases"] > 0 or row["vdpv_cases"] > 0:
-                return "High"
-            elif row["npev_cases"] > 0 or row["afp_cases"] > 0:
-                return "Medium"
-            else:
-                return "Low"
-        province_df["Risk_Level"] = province_df.apply(assign_risk, axis=1)
-
-        # Step 3: Prepare ML data
-        features = ["total_cases", "afp_cases", "wpv_cases", "vdpv_cases", "npev_cases", "nvi_cases"]
-        X = province_df[features]
-        y = province_df["Risk_Level"]
-
-        # Step 4: Train Random Forest
-        @st.cache_resource(show_spinner="Training Province Risk ML model...")
-        def train_risk_model(X_train, y_train):
-            model = RandomForestClassifier(
-                n_estimators=500,
-                max_depth=6,
-                class_weight="balanced",
-                random_state=42
-            )
-            model.fit(X_train, y_train)
-            return model
-
+    # Safe train/test split: stratify only if enough samples
+    if len(province_df) >= 6:  # minimum 2 samples per class approx.
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.25, random_state=42, stratify=y
         )
+    else:
+        X_train, X_test, y_train, y_test = X, X, y, y  # train/test = all
 
-        rf_model = train_risk_model(X_train, y_train)
+    rf_model = train_risk_model(X_train, y_train)
 
-        # Step 5: Model Evaluation
-        y_pred = rf_model.predict(X_test)
-        st.subheader("📊 Model Evaluation")
-        st.text(classification_report(y_test, y_pred))
+    # Step 5: Model Evaluation
+    y_pred = rf_model.predict(X_test)
+    st.subheader("📊 Model Evaluation")
+    st.text(classification_report(y_test, y_pred, zero_division=0))
 
-        # Step 6: Predict Province Risk
-        province_df["Predicted_Risk"] = rf_model.predict(X)
+    # Step 6: Predict Province Risk
+    province_df["Predicted_Risk"] = rf_model.predict(X)
 
-        # Step 7: Visuals
-        st.subheader("🗺️ Province Risk Classification")
-        st.dataframe(
-            province_df[["PROVINCE", "Predicted_Risk", "wpv_cases", "vdpv_cases", "npev_cases", "total_cases"]]
-            .sort_values("Predicted_Risk")
-        )
+    # Step 7: Visuals - Risk Classification
+    st.subheader("🗺️ Province Risk Classification")
+    st.dataframe(
+        province_df[["PROVINCE", "Predicted_Risk", "wpv_cases", "vdpv_cases", "npev_cases", "total_cases"]]
+        .sort_values("Predicted_Risk")
+    )
 
-        fig_risk = px.bar(
-            province_df,
-            x="PROVINCE",
-            color="Predicted_Risk",
-            title="Province-level Risk Classification (ML)",
-            text="Predicted_Risk"
-        )
-        fig_risk.update_traces(textposition="outside", textfont_size=14)
-        st.plotly_chart(fig_risk, use_container_width=True)
+    fig_risk = px.bar(
+        province_df,
+        x="PROVINCE",
+        color="Predicted_Risk",
+        title="Province-level Risk Classification (ML)",
+        text="Predicted_Risk"
+    )
+    fig_risk.update_traces(textposition="outside", textfont_size=14)
+    st.plotly_chart(fig_risk, use_container_width=True)
 
-        # Feature importance
-        st.subheader("🔍 Risk Drivers (Feature Importance)")
-        imp_df = pd.DataFrame({
-            "Feature": features,
-            "Importance": rf_model.feature_importances_
-        }).sort_values("Importance", ascending=False)
-        st.dataframe(imp_df)
+    # Feature importance
+    st.subheader("🔍 Risk Drivers (Feature Importance)")
+    imp_df = pd.DataFrame({
+        "Feature": features,
+        "Importance": rf_model.feature_importances_
+    }).sort_values("Importance", ascending=False)
+    st.dataframe(imp_df)
 
-        # Manual retrain
-        if st.sidebar.button("🔁 Force Model Retrain"):
-            train_risk_model.clear()
-            st.experimental_rerun()
+    # Step 8: Manual retrain button
+    if st.sidebar.button("🔁 Force Model Retrain"):
+        train_risk_model.clear()
+        st.experimental_rerun()
 
-        # Info
-        st.info(
-            "⚠️ Province risk classification is for surveillance decision support only. "
-            "It does NOT replace laboratory confirmation or epidemiological investigation."
-        )
+    # Info
+    st.info(
+        "⚠️ Province risk classification is for surveillance decision support only. "
+        "It does NOT replace laboratory confirmation or epidemiological investigation."
+    )
+
